@@ -9,7 +9,6 @@ var http = require('http')
   , bl = require('bl')
   , hawk = require('hawk')
   , aws2 = require('aws-sign2')
-  , aws4 = require('aws4')
   , httpSignature = require('http-signature')
   , mime = require('mime-types')
   , stringstream = require('stringstream')
@@ -71,6 +70,20 @@ function filterOutReservedFunctions(reserved, options) {
 
 }
 
+// Function for properly handling a connection error
+function connectionErrorHandler(error) {
+  var socket = this
+  if (socket.res) {
+    if (socket.res.request) {
+      socket.res.request.emit('error', error)
+    } else {
+      socket.res.emit('error', error)
+    }
+  } else {
+    socket._httpMessage.emit('error', error)
+  }
+}
+
 // Return a simpler request object to allow serialization
 function requestToJSON() {
   var self = this
@@ -123,7 +136,7 @@ function Request (options) {
   self._qs = new Querystring(self)
   self._auth = new Auth(self)
   self._oauth = new OAuth(self)
-  self._multipart = new Multipart(self)
+  //self._multipart = new Multipart(self)
   self._redirect = new Redirect(self)
   self._tunnel = new Tunnel(self)
   self.init(options)
@@ -322,7 +335,7 @@ Request.prototype.init = function (options) {
     var formData = options.formData
     var requestForm = self.form()
     var appendFormValue = function (key, value) {
-      if (value && value.hasOwnProperty('value') && value.hasOwnProperty('options')) {
+      if (value.hasOwnProperty('value') && value.hasOwnProperty('options')) {
         requestForm.append(key, value.value, value.options)
       } else {
         requestForm.append(key, value)
@@ -407,9 +420,9 @@ Request.prototype.init = function (options) {
   if (options.json) {
     self.json(options.json)
   }
-  if (options.multipart) {
-    self.multipart(options.multipart)
-  }
+//  if (options.multipart) {
+//    self.multipart(options.multipart)
+//  }
 
   if (options.time) {
     self.timing = true
@@ -536,9 +549,9 @@ Request.prototype.init = function (options) {
           self._form.pipe(self)
         }
       }
-      if (self._multipart && self._multipart.chunked) {
-        self._multipart.body.pipe(self)
-      }
+ //     if (self._multipart && self._multipart.chunked) {
+ //       self._multipart.body.pipe(self)
+ //     }
       if (self.body) {
         if (isstream(self.body)) {
           self.body.pipe(self)
@@ -791,6 +804,11 @@ Request.prototype.start = function () {
     self.emit('socket', socket)
   })
 
+  self.on('end', function() {
+    if ( self.req.connection ) {
+      self.req.connection.removeListener('error', connectionErrorHandler)
+    }
+  })
   self.emit('request', self.req)
 }
 
@@ -825,6 +843,11 @@ Request.prototype.onRequestResponse = function (response) {
     debug('response end', self.uri.href, response.statusCode, response.headers)
   })
 
+  // The check on response.connection is a workaround for browserify.
+  if (response.connection && response.connection.listeners('error').indexOf(connectionErrorHandler) === -1) {
+    response.connection.setMaxListeners(0)
+    response.connection.once('error', connectionErrorHandler)
+  }
   if (self._aborted) {
     debug('aborted', self.uri.href)
     response.resume()
@@ -1241,9 +1264,10 @@ Request.prototype.aws = function (opts, now) {
     self._aws = opts
     return self
   }
-
+  
   if (opts.sign_version == 4 || opts.sign_version == '4') {
-    // use aws4
+    var aws4 = require('aws4')
+    // use aws4  
     var options = {
       host: self.uri.host,
       path: self.uri.path,
